@@ -1,0 +1,6 @@
+{
+  "name": "Live Video Wallpaper",
+  "description": "App allows setting video as live wallpaper",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

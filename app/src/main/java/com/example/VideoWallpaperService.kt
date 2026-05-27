@@ -257,6 +257,10 @@ class VideoWallpaperService : WallpaperService() {
                 try {
                     releaseMediaPlayer()
                     mediaPlayer = MediaPlayer().apply {
+                        setOnErrorListener { _, what, extra ->
+                            android.util.Log.e("VideoWallpaperService", "MediaPlayer error: what=$what, extra=$extra")
+                            true // Handle error gracefully, preventing crashes
+                        }
                         setSurface(surface)
                         setDataSource(applicationContext, Uri.parse(uriString))
                         isLooping = true

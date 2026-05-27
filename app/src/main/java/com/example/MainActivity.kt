@@ -82,7 +82,6 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var downloadProgress by remember { mutableStateOf<Float?>(null) }
     var downloadStatusText by remember { mutableStateOf("") }
     
-    var appUpdateUrlInput by remember { mutableStateOf("") }
     var appUpdateProgress by remember { mutableStateOf<Float?>(null) }
     var appUpdateStatusText by remember { mutableStateOf("") }
     var showWifiWarningDialog by remember { mutableStateOf(false) }
@@ -457,59 +456,64 @@ fun MainScreen(modifier: Modifier = Modifier) {
                                 color = if (isWifi.value) Color(0xFF2E7D32) else Color(0xFFE65100)
                             )
                             Text(
-                                text = if (isWifi.value) "Sẵn sàng tải bản cập nhật mượt mà, tốc độ cao." else "Bạn có thể dán link .apk hoặc dùng Wifi để tránh phát sinh cước 3G/4G.",
+                                text = if (isWifi.value) "Sẵn sàng tải bản cập nhật mượt mà, tốc độ cao." else "Kết nối Wifi giúp tải bản cập nhật nhanh chóng và tiết kiệm dung lượng di động.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isWifi.value) Color(0xFF1B5E20) else Color(0xFF5D4037)
                             )
                         }
                     }
 
-                    TextField(
-                        value = appUpdateUrlInput,
-                        onValueChange = { appUpdateUrlInput = it },
-                        placeholder = { Text("Dán link trực tiếp tệp .apk của ứng dụng tại đây...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 2,
-                        shape = RoundedCornerShape(8.dp),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    )
-
                     val startUpdateDownload = {
                         scope.launch {
                             appUpdateProgress = 0f
-                            appUpdateStatusText = "Đang kết nối tới máy chủ cập nhật..."
-                            val destFile = File(context.cacheDir, "app_update.apk")
-                            if (destFile.exists()) {
-                                destFile.delete()
+                            appUpdateStatusText = "Đang kiểm tra danh sách bản cập nhật từ máy chủ..."
+                            
+                            val systemInfo = fetchGitHubApkInfo()
+                            if (systemInfo == null || systemInfo.latestApk == null) {
+                                appUpdateProgress = null
+                                appUpdateStatusText = "Lỗi: Không tìm thấy file cài (.apk) trên GitHub API."
+                                return@launch
                             }
-                            val success = downloadVideo(appUpdateUrlInput.trim(), destFile) { progress ->
+                            
+                            val (apkName, downloadUrl) = systemInfo.latestApk
+                            val allApks = systemInfo.allApkNames
+                            
+                            // Bước 4: Kiểm tra và dọn dẹp các file cũ không có trên Server
+                            val updatesDir = File(context.cacheDir, "updates")
+                            if (!updatesDir.exists()) {
+                                updatesDir.mkdirs()
+                            }
+                            updatesDir.listFiles()?.forEach { localFile ->
+                                if (localFile.isFile && localFile.name.endsWith(".apk") && !allApks.contains(localFile.name)) {
+                                    localFile.delete()
+                                }
+                            }
+                            
+                            val destFile = File(updatesDir, apkName)
+                            appUpdateStatusText = "Đang tải xuống: $apkName..."
+                            
+                            val success = downloadVideo(downloadUrl, destFile) { progress ->
                                 appUpdateProgress = progress
-                                appUpdateStatusText = "Đang tải xuống bản cập nhật: ${(progress * 100).toInt()}%"
+                                appUpdateStatusText = "Đang tải xuống $apkName: ${(progress * 100).toInt()}%"
                             }
+                            
                             if (success && destFile.exists()) {
                                 appUpdateProgress = null
-                                appUpdateStatusText = "Tải thành công! Đang kích hoạt cài đặt ứng dụng..."
+                                appUpdateStatusText = "Tải thành công! Đang kích hoạt cài đặt ứng dụng: $apkName..."
                                 installApk(context, destFile)
                             } else {
                                 appUpdateProgress = null
-                                appUpdateStatusText = "Lỗi: Lấy file .apk không thành công. Hãy chắc chắn link tải hoạt động."
+                                appUpdateStatusText = "Lỗi: Không thể tải xuống tệp APK từ máy chủ."
                             }
                         }
                     }
 
                     Button(
                         onClick = {
-                            if (appUpdateUrlInput.isNotBlank()) {
-                                if (!isWifi.value) {
-                                    showWifiWarningDialog = true
-                                } else {
-                                    startUpdateDownload()
-                                }
+                            if (!isWifi.value) {
+                                showWifiWarningDialog = true
                             } else {
-                                appUpdateStatusText = "Vui lòng nhập link trực tiếp file .apk cần cập nhật!"
+                                startUpdateDownload()
                             }
                         },
                         enabled = appUpdateProgress == null,
@@ -914,6 +918,10 @@ fun VideoPreview(
     DisposableEffect(videoUri, lifecycleOwner) {
         val mp = MediaPlayer().apply {
             try {
+                setOnErrorListener { _, what, extra ->
+                    android.util.Log.e("VideoPreview", "MediaPlayer error: what=$what, extra=$extra")
+                    true // error handled gracefully, do not crash app
+                }
                 setDataSource(context, videoUri)
                 isLooping = true
                 val vol = if (isMuted) 0f else 1f
@@ -1063,10 +1071,25 @@ suspend fun downloadVideo(
         val data = ByteArray(4096)
         var total: Long = 0
         var count: Int
+        var lastPublishedProgress = -1
         while (input.read(data).also { count = it } != -1) {
             total += count
             if (fileLength > 0) {
-                onProgress(total.toFloat() / fileLength.toFloat())
+                val progress = total.toFloat() / fileLength.toFloat()
+                val progressPercent = (progress * 100).toInt()
+                if (progressPercent != lastPublishedProgress) {
+                    lastPublishedProgress = progressPercent
+                    withContext(Dispatchers.Main) {
+                        onProgress(progress)
+                    }
+                }
+            } else {
+                // If content length is unknown, throttle updates every 100KB to avoid UI spam
+                if (total % (100 * 1024) < 4096) {
+                    withContext(Dispatchers.Main) {
+                        onProgress(-1f)
+                    }
+                }
             }
             output.write(data, 0, count)
         }
@@ -1111,3 +1134,47 @@ fun installApk(context: Context, apkFile: File) {
         e.printStackTrace()
     }
 }
+
+data class GitHubApkInfo(
+    val latestApk: Pair<String, String>?,
+    val allApkNames: Set<String>
+)
+
+suspend fun fetchGitHubApkInfo(): GitHubApkInfo? = withContext(Dispatchers.IO) {
+    var connection: HttpURLConnection? = null
+    try {
+        val url = URL("https://api.github.com/repos/catkiuhi/Live-Video-Wallpaper/contents/.build-outputs")
+        connection = url.openConnection() as HttpURLConnection
+        connection.connectTimeout = 15000
+        connection.readTimeout = 15000
+        connection.setRequestProperty("User-Agent", "Android-App")
+        connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+        
+        if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+            val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+            val jsonArray = org.json.JSONArray(responseText)
+            val allApkNames = mutableSetOf<String>()
+            var latestPair: Pair<String, String>? = null
+            
+            for (i in 0 until jsonArray.length()) {
+                val fileObj = jsonArray.getJSONObject(i)
+                val name = fileObj.getString("name")
+                val type = fileObj.getString("type")
+                if (type == "file" && name.endsWith(".apk", ignoreCase = true)) {
+                    allApkNames.add(name)
+                    val downloadUrl = fileObj.optString("download_url", "")
+                    if (downloadUrl.isNotEmpty() && latestPair == null) {
+                        latestPair = Pair(name, downloadUrl)
+                    }
+                }
+            }
+            return@withContext GitHubApkInfo(latestPair, allApkNames)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        connection?.disconnect()
+    }
+    null
+}
+

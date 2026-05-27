@@ -944,8 +944,10 @@ fun VideoPreview(
     val context = LocalContext.current
     val mediaPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val currentSurface = remember { mutableStateOf<android.view.Surface?>(null) }
 
     DisposableEffect(videoUri, lifecycleOwner) {
+        var isPrepared = false
         val mp = MediaPlayer().apply {
             try {
                 setOnErrorListener { _, what, extra ->
@@ -957,8 +959,20 @@ fun VideoPreview(
                 val vol = if (isMuted) 0f else 1f
                 setVolume(vol, vol)
                 setOnPreparedListener {
-                    it.start()
+                    isPrepared = true
+                    try {
+                        it.start()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
+                
+                // If a surface is already created and valid, associate it immediately
+                val surface = currentSurface.value
+                if (surface != null && surface.isValid) {
+                    setSurface(surface)
+                }
+                
                 prepareAsync()
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -969,9 +983,13 @@ fun VideoPreview(
         val observer = LifecycleEventObserver { _, event ->
             try {
                 if (event == Lifecycle.Event.ON_PAUSE) {
-                    mp.pause()
+                    if (isPrepared) {
+                        mp.pause()
+                    }
                 } else if (event == Lifecycle.Event.ON_RESUME) {
-                    mp.start()
+                    if (isPrepared) {
+                        mp.start()
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -987,10 +1005,31 @@ fun VideoPreview(
             }
             try {
                 mp.stop()
+            } catch (e: Exception) {
+                // Ignore
+            }
+            try {
                 mp.release()
             } catch (e: Exception) {
                 // Ignore
             }
+            if (mediaPlayer.value == mp) {
+                mediaPlayer.value = null
+            }
+        }
+    }
+
+    // Reactively update surface association only when currentSurface changes
+    LaunchedEffect(currentSurface.value) {
+        val surface = currentSurface.value
+        try {
+            if (surface != null && surface.isValid) {
+                mediaPlayer.value?.setSurface(surface)
+            } else {
+                mediaPlayer.value?.setSurface(null)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -1015,32 +1054,18 @@ fun VideoPreview(
                 android.view.SurfaceView(ctx).apply {
                     holder.addCallback(object : android.view.SurfaceHolder.Callback {
                         override fun surfaceCreated(hold: android.view.SurfaceHolder) {
-                            try {
-                                mediaPlayer.value?.setSurface(hold.surface)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
+                            currentSurface.value = hold.surface
                         }
 
                         override fun surfaceChanged(hold: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {}
                         override fun surfaceDestroyed(hold: android.view.SurfaceHolder) {
-                            try {
-                                mediaPlayer.value?.setSurface(null)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
+                            currentSurface.value = null
                         }
                     })
                 }
             },
-            update = { view ->
-                if (view.holder.surface != null && view.holder.surface.isValid) {
-                    try {
-                        mediaPlayer.value?.setSurface(view.holder.surface)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+            update = { _ ->
+                // Leave empty to completely avoid calling setSurface during frame-by-frame recomposition (which was blocking the UI thread and causing ANRs)
             },
             modifier = Modifier
                 .fillMaxSize()

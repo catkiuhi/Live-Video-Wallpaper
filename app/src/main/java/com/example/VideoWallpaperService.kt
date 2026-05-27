@@ -112,39 +112,44 @@ class VideoWallpaperService : WallpaperService() {
             super.onVisibilityChanged(visible)
             synchronized(lock) {
                 isWallpaperVisible = visible
-                if (visible) {
-                    if (isMediaPlayerPrepared) {
-                        try {
-                            mediaPlayer?.let { mp ->
-                                videoSurface?.let { mp.setSurface(it) }
-                                if (!mp.isPlaying) {
-                                    mp.start()
+                frameAvailable = true
+                lock.notifyAll()
+            }
+            // Offload MediaPlayer interactions to a background thread to prevent UI thread blockage and ANRs
+            Thread {
+                synchronized(lock) {
+                    if (visible) {
+                        if (isMediaPlayerPrepared) {
+                            try {
+                                mediaPlayer?.let { mp ->
+                                    videoSurface?.let { mp.setSurface(it) }
+                                    if (!mp.isPlaying) {
+                                        mp.start()
+                                    }
                                 }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    } else {
+                        try {
+                            if (isMediaPlayerPrepared && mediaPlayer?.isPlaying == true) {
+                                mediaPlayer?.pause()
+                            }
+                            if (isMediaPlayerPrepared && resetOnLock) {
+                                mediaPlayer?.seekTo(0)
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
-                    }
-                    frameAvailable = true
-                } else {
-                    try {
-                        if (isMediaPlayerPrepared && mediaPlayer?.isPlaying == true) {
-                            mediaPlayer?.pause()
+                        try {
+                            mediaPlayer?.setSurface(null)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                        if (isMediaPlayerPrepared && resetOnLock) {
-                            mediaPlayer?.seekTo(0)
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                    try {
-                        mediaPlayer?.setSurface(null)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }
-                lock.notifyAll()
-            }
+            }.start()
         }
 
         private fun startRenderThread(holder: SurfaceHolder) {

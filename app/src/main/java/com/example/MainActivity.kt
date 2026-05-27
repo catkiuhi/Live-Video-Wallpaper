@@ -999,54 +999,73 @@ fun VideoPreview(
     val mediaPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentSurface = remember { mutableStateOf<android.view.Surface?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     DisposableEffect(videoUri, lifecycleOwner) {
         var isPrepared = false
-        val mp = MediaPlayer().apply {
-            try {
-                setOnErrorListener { _, what, extra ->
-                    android.util.Log.e("VideoPreview", "MediaPlayer error: what=$what, extra=$extra")
-                    true // error handled gracefully, do not crash app
+        var mp: MediaPlayer? = null
+        
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val newMp = MediaPlayer().apply {
+                        setOnErrorListener { _, what, extra ->
+                            android.util.Log.e("VideoPreview", "MediaPlayer error: what=$what, extra=$extra")
+                            true // error handled gracefully, do not crash app
+                        }
+                        setDataSource(context, videoUri)
+                        isLooping = true
+                        val vol = if (isMuted) 0f else 1f
+                        setVolume(vol, vol)
+                        setOnPreparedListener {
+                            isPrepared = true
+                            coroutineScope.launch(Dispatchers.Main) {
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        it.start()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If a surface is already created and valid, associate it immediately
+                        val surface = currentSurface.value
+                        if (surface != null && surface.isValid) {
+                            setSurface(surface)
+                        }
+                        
+                        prepareAsync()
+                    }
+                    mp = newMp
+                    withContext(Dispatchers.Main) {
+                        mediaPlayer.value = newMp
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-                setDataSource(context, videoUri)
-                isLooping = true
-                val vol = if (isMuted) 0f else 1f
-                setVolume(vol, vol)
-                setOnPreparedListener {
-                    isPrepared = true
+            }
+        }
+
+        val observer = LifecycleEventObserver { _, event ->
+            val activeMp = mp ?: return@LifecycleEventObserver
+            coroutineScope.launch {
+                withContext(Dispatchers.IO) {
                     try {
-                        it.start()
+                        if (event == Lifecycle.Event.ON_PAUSE) {
+                            if (isPrepared) {
+                                activeMp.pause()
+                            }
+                        } else if (event == Lifecycle.Event.ON_RESUME) {
+                            if (isPrepared) {
+                                activeMp.start()
+                            }
+                        }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
                 }
-                
-                // If a surface is already created and valid, associate it immediately
-                val surface = currentSurface.value
-                if (surface != null && surface.isValid) {
-                    setSurface(surface)
-                }
-                
-                prepareAsync()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        mediaPlayer.value = mp
-
-        val observer = LifecycleEventObserver { _, event ->
-            try {
-                if (event == Lifecycle.Event.ON_PAUSE) {
-                    if (isPrepared) {
-                        mp.pause()
-                    }
-                } else if (event == Lifecycle.Event.ON_RESUME) {
-                    if (isPrepared) {
-                        mp.start()
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -1057,17 +1076,24 @@ fun VideoPreview(
             } catch (e: Exception) {
                 // Ignore
             }
-            try {
-                mp.stop()
-            } catch (e: Exception) {
-                // Ignore
+            val activeMp = mp
+            if (activeMp != null) {
+                coroutineScope.launch {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            activeMp.stop()
+                        } catch (e: Exception) {
+                            // Ignore
+                        }
+                        try {
+                            activeMp.release()
+                        } catch (e: Exception) {
+                            // Ignore
+                        }
+                    }
+                }
             }
-            try {
-                mp.release()
-            } catch (e: Exception) {
-                // Ignore
-            }
-            if (mediaPlayer.value == mp) {
+            if (mediaPlayer.value == activeMp) {
                 mediaPlayer.value = null
             }
         }
@@ -1076,25 +1102,33 @@ fun VideoPreview(
     // Reactively update surface association only when currentSurface changes
     LaunchedEffect(currentSurface.value) {
         val surface = currentSurface.value
-        try {
-            if (surface != null && surface.isValid) {
-                mediaPlayer.value?.setSurface(surface)
-            } else {
-                mediaPlayer.value?.setSurface(null)
+        val activeMp = mediaPlayer.value
+        if (activeMp != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    if (surface != null && surface.isValid) {
+                        activeMp.setSurface(surface)
+                    } else {
+                        activeMp.setSurface(null)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
     // Dynamic mute update
     LaunchedEffect(isMuted) {
-        mediaPlayer.value?.apply {
-            try {
-                val vol = if (isMuted) 0f else 1f
-                setVolume(vol, vol)
-            } catch (e: Exception) {
-                e.printStackTrace()
+        val activeMp = mediaPlayer.value
+        if (activeMp != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val vol = if (isMuted) 0f else 1f
+                    activeMp.setVolume(vol, vol)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }

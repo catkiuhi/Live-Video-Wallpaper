@@ -29,6 +29,7 @@ class VideoWallpaperService : WallpaperService() {
         private val lock = Object()
         private var frameAvailable = false
         private var triggerVideoReload = false
+        private var videoSurface: android.view.Surface? = null
 
         // Settings (cached in memory)
         private var scale = 1.0f
@@ -114,8 +115,11 @@ class VideoWallpaperService : WallpaperService() {
                 if (visible) {
                     if (isMediaPlayerPrepared) {
                         try {
-                            if (mediaPlayer?.isPlaying == false) {
-                                mediaPlayer?.start()
+                            mediaPlayer?.let { mp ->
+                                videoSurface?.let { mp.setSurface(it) }
+                                if (!mp.isPlaying) {
+                                    mp.start()
+                                }
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -123,17 +127,20 @@ class VideoWallpaperService : WallpaperService() {
                     }
                     frameAvailable = true
                 } else {
-                    if (isMediaPlayerPrepared) {
-                        try {
-                            if (mediaPlayer?.isPlaying == true) {
-                                mediaPlayer?.pause()
-                            }
-                            if (resetOnLock) {
-                                mediaPlayer?.seekTo(0)
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                    try {
+                        if (isMediaPlayerPrepared && mediaPlayer?.isPlaying == true) {
+                            mediaPlayer?.pause()
                         }
+                        if (isMediaPlayerPrepared && resetOnLock) {
+                            mediaPlayer?.seekTo(0)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    try {
+                        mediaPlayer?.setSurface(null)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     }
                 }
                 lock.notifyAll()
@@ -164,8 +171,11 @@ class VideoWallpaperService : WallpaperService() {
                     }
                 }
 
-                val videoSurface = android.view.Surface(tex)
-                setupMediaPlayer(videoSurface)
+                val surface = android.view.Surface(tex)
+                synchronized(lock) {
+                    videoSurface = surface
+                }
+                setupMediaPlayer(surface)
 
                 val sTMatrix = FloatArray(16)
 
@@ -194,7 +204,7 @@ class VideoWallpaperService : WallpaperService() {
 
                     if (reloadVideo) {
                         try {
-                            setupMediaPlayer(videoSurface)
+                            videoSurface?.let { setupMediaPlayer(it) }
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
@@ -217,7 +227,10 @@ class VideoWallpaperService : WallpaperService() {
                 }
 
                 releaseMediaPlayer()
-                videoSurface.release()
+                surface.release()
+                synchronized(lock) {
+                    videoSurface = null
+                }
                 tex.release()
                 render.release()
                 egl.release()
@@ -272,7 +285,11 @@ class VideoWallpaperService : WallpaperService() {
                             android.util.Log.e("VideoWallpaperService", "MediaPlayer error: what=$what, extra=$extra")
                             true // Handle error gracefully, preventing crashes
                         }
-                        setSurface(surface)
+                        if (isWallpaperVisible) {
+                            setSurface(surface)
+                        } else {
+                            setSurface(null)
+                        }
                         setDataSource(applicationContext, Uri.parse(uriString))
                         isLooping = true
                         val vol = if (isMuted) 0f else 1f
@@ -283,7 +300,14 @@ class VideoWallpaperService : WallpaperService() {
                                 isMediaPlayerPrepared = true
                                 if (isWallpaperVisible && isRunning) {
                                     try {
+                                        videoSurface?.let { preparedMp.setSurface(it) }
                                         preparedMp.start()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                } else {
+                                    try {
+                                        preparedMp.setSurface(null)
                                     } catch (e: Exception) {
                                         e.printStackTrace()
                                     }

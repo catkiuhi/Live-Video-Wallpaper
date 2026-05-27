@@ -328,13 +328,13 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "📥 Cập Nhật Video Trực Tuyến (Không Cần USB)",
+                        text = "📥 Đồng Bộ Video Qua Liên Kết Chia Sẻ (YouTube, TikTok, Drive...)",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Để cập nhật video liên tục mà không cần dùng cáp USB nạp file thủ công, bạn có thể dán liên kết tải video (.mp4) trực tiếp vào đây để nạp vào máy.",
+                        text = "Hỗ trợ dán liên kết tải video trực tiếp (.mp4) hoặc dán link chia sẻ từ YouTube, TikTok, Facebook, Google Drive, Dropbox... Hệ thống sẽ tự động đồng bộ và tải xuống làm hình nền động.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -342,7 +342,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     TextField(
                         value = videoUrlInput,
                         onValueChange = { videoUrlInput = it },
-                        placeholder = { Text("Dán link video liên kết trực tiếp (.mp4) tại đây...") },
+                        placeholder = { Text("Dán link chia sẻ YouTube, TikTok, Drive, Dropbox hoặc link .mp4 trực tiếp...") },
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 2,
                         shape = RoundedCornerShape(8.dp),
@@ -362,12 +362,49 @@ fun MainScreen(modifier: Modifier = Modifier) {
                                 if (videoUrlInput.isNotBlank()) {
                                     scope.launch {
                                         downloadProgress = 0f
-                                        downloadStatusText = "Đang kết nối tới máy chủ..."
-                                        val destFile = File(context.filesDir, "downloaded_wallpaper.mp4")
-                                        val success = downloadVideo(videoUrlInput.trim(), destFile) { progress ->
-                                            downloadProgress = progress
-                                            downloadStatusText = "Đang tải xuống: ${(progress * 100).toInt()}%"
+                                        val inputUrl = videoUrlInput.trim()
+                                        val preprocessedUrl = preprocessShareLink(inputUrl)
+                                        
+                                        var targetDownloadUrl = preprocessedUrl
+                                        var isResolved = false
+                                        
+                                        if (isSocialShareLink(preprocessedUrl)) {
+                                            downloadStatusText = "Đang nhận diện liên kết chia sẻ từ mạng xã hội..."
+                                            val resolved = resolveVideoShareLink(preprocessedUrl)
+                                            if (resolved != null) {
+                                                targetDownloadUrl = resolved
+                                                isResolved = true
+                                                downloadStatusText = "Đã nhận được luồng video! Đang kết nối tải về..."
+                                            } else {
+                                                downloadProgress = null
+                                                downloadStatusText = "Lỗi: Không tìm thấy luồng video. Hãy kiểm tra lại link mở hoặc thử link trực tiếp."
+                                                return@launch
+                                            }
                                         }
+
+                                        val destFile = File(context.filesDir, "downloaded_wallpaper.mp4")
+                                        var success = downloadVideo(targetDownloadUrl, destFile) { progress ->
+                                            downloadProgress = progress
+                                            downloadStatusText = if (progress >= 0f) {
+                                                "Đang tải xuống: ${(progress * 100).toInt()}%"
+                                            } else {
+                                                "Đang tải dữ liệu nâng cao..."
+                                            }
+                                        }
+                                        
+                                        // If not resolved initially and direct download failed, try resolving via Cobalt as fallback
+                                        if (!success && !isResolved) {
+                                            downloadStatusText = "Thử giải mã chất lượng qua máy chủ đám mây..."
+                                            val resolvedFallback = resolveVideoShareLink(preprocessedUrl)
+                                            if (resolvedFallback != null) {
+                                                downloadStatusText = "Giải mã thành công! Đang tải xuống..."
+                                                success = downloadVideo(resolvedFallback, destFile) { progress ->
+                                                    downloadProgress = progress
+                                                    downloadStatusText = "Đang tải xuống: ${(progress * 100).toInt()}%"
+                                                }
+                                            }
+                                        }
+                                        
                                         if (success && destFile.exists()) {
                                             downloadProgress = null
                                             downloadStatusText = "Tải thành công! Đã áp dụng video làm hình nền."
@@ -376,7 +413,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                                             selectedUri = fileUri
                                         } else {
                                             downloadProgress = null
-                                            downloadStatusText = "Lỗi: Không thể tải hoặc lưu video. Hãy kiểm tra lại link."
+                                            downloadStatusText = "Lỗi: Không thể tải hoặc lưu video. Hãy thử liên kết chia sẻ khác hoặc định dạng mp4."
                                         }
                                     }
                                 } else {
@@ -386,7 +423,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             enabled = downloadProgress == null && videoUrlInput.isNotBlank(),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(text = if (downloadProgress != null) "Đang tải xuống..." else "Tải & Áp Dụng")
+                            Text(text = if (downloadProgress != null) "Đang tải..." else "Tải & Áp Dụng")
                         }
 
                         if (videoUrlInput.isNotEmpty()) {
@@ -399,7 +436,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     // Download Progress feedback
                     if (downloadProgress != null) {
                         LinearProgressIndicator(
-                            progress = { downloadProgress ?: 0f },
+                            progress = { if (downloadProgress == -1f) 0.5f else (downloadProgress ?: 0f) },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -1247,6 +1284,139 @@ suspend fun downloadVideo(
     } finally {
         connection?.disconnect()
     }
+}
+
+suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatchers.IO) {
+    val endpoints = listOf(
+        "https://api.cobalt.tools/api/json",
+        "https://cobalt.api.rybbt.com/api/json",
+        "https://api.cobalt.tools",
+        "https://api.smooth.yt/api/json"
+    )
+    
+    for (endpoint in endpoints) {
+        var connection: HttpURLConnection? = null
+        try {
+            val url = URL(endpoint)
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 15000
+            connection.readTimeout = 15000
+            connection.doOutput = true
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Content-Type", "application/json")
+            
+            val jsonBody = org.json.JSONObject().apply {
+                put("url", urlStr)
+                put("videoQuality", "720")
+            }
+            
+            connection.outputStream.use { os ->
+                os.write(jsonBody.toString().toByteArray(Charsets.UTF_8))
+            }
+            
+            val responseCode = connection.responseCode
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonResponse = org.json.JSONObject(responseText)
+                val status = jsonResponse.optString("status", "")
+                
+                if (status == "error") {
+                    val errorText = jsonResponse.optString("text", "Lỗi dịch vụ giải mã.")
+                    android.util.Log.e("CobaltAPI", "Endpoint $endpoint error: $errorText")
+                } else {
+                    val resolvedUrl = jsonResponse.optString("url", "")
+                    if (resolvedUrl.isNotEmpty()) {
+                        return@withContext resolvedUrl
+                    }
+                    
+                    val pickerArray = jsonResponse.optJSONArray("picker")
+                    if (pickerArray != null && pickerArray.length() > 0) {
+                        for (i in 0 until pickerArray.length()) {
+                            val item = pickerArray.optJSONObject(i)
+                            if (item != null) {
+                                val itemUrl = item.optString("url", "")
+                                if (itemUrl.isNotEmpty()) {
+                                    return@withContext itemUrl
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            android.util.Log.e("CobaltAPI", "Endpoint $endpoint failed: ${e.message}")
+        } finally {
+            connection?.disconnect()
+        }
+    }
+    null
+}
+
+fun isSocialShareLink(url: String): Boolean {
+    val lower = url.lowercase()
+    return lower.contains("youtube.com") || 
+           lower.contains("youtu.be") || 
+           lower.contains("tiktok.com") || 
+           lower.contains("instagram.com") || 
+           lower.contains("facebook.com") || 
+           lower.contains("fb.watch") || 
+           lower.contains("twitter.com") || 
+           lower.contains("x.com") || 
+           lower.contains("bilibili.com") || 
+           lower.contains("vimeo.com") ||
+           lower.contains("reddit.com") ||
+           lower.contains("pinterest.com")
+}
+
+fun preprocessShareLink(urlStr: String): String {
+    val trimmed = urlStr.trim()
+    if (trimmed.contains("drive.google.com")) {
+        val fileId = extractGoogleDriveFileId(trimmed)
+        if (fileId != null) {
+            return "https://docs.google.com/uc?export=download&id=$fileId"
+        }
+    }
+    if (trimmed.contains("dropbox.com")) {
+        if (trimmed.endsWith("dl=0")) {
+            return trimmed.replace("dl=0", "dl=1")
+        } else if (!trimmed.contains("dl=1")) {
+            return if (trimmed.contains("?")) "$trimmed&dl=1" else "$trimmed?dl=1"
+        }
+    }
+    return trimmed
+}
+
+fun extractGoogleDriveFileId(url: String): String? {
+    try {
+        if (url.contains("/file/d/")) {
+            val parts = url.split("/file/d/")
+            if (parts.size > 1) {
+                val subPart = parts[1]
+                val idEndIndex = subPart.indexOfAny(charArrayOf('/', '?', '&'))
+                return if (idEndIndex != -1) {
+                    subPart.substring(0, idEndIndex)
+                } else {
+                    subPart
+                }
+            }
+        } else if (url.contains("id=")) {
+            val parts = url.split("id=")
+            if (parts.size > 1) {
+                val subPart = parts[1]
+                val idEndIndex = subPart.indexOfAny(charArrayOf('&', '?'))
+                return if (idEndIndex != -1) {
+                    subPart.substring(0, idEndIndex)
+                } else {
+                    subPart
+                }
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return null
 }
 
 fun installApk(context: Context, apkFile: File) {

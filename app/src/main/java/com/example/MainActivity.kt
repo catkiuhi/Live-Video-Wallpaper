@@ -82,6 +82,9 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var videoUrlInput by remember { mutableStateOf("") }
     var downloadProgress by remember { mutableStateOf<Float?>(null) }
     var downloadStatusText by remember { mutableStateOf("") }
+
+    var isImportingLocalVideo by remember { mutableStateOf(false) }
+    var localImportStatusText by remember { mutableStateOf("") }
     
     var appUpdateProgress by remember { mutableStateOf<Float?>(null) }
     var appUpdateStatusText by remember { mutableStateOf("") }
@@ -123,14 +126,44 @@ fun MainScreen(modifier: Modifier = Modifier) {
     }
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let {
-            try {
-                // Obtain persistable permission so the wallpaper service can read it when app is closed
-                context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                prefs.edit().putString("video_uri", it.toString()).apply()
-                selectedUri = it
-            } catch (e: Exception) {
-                e.printStackTrace()
+        uri?.let { sourceUri ->
+            isImportingLocalVideo = true
+            localImportStatusText = "Đang sao chép file video vào hệ thống..."
+            scope.launch {
+                val success = withContext(Dispatchers.IO) {
+                    try {
+                        val destFile = File(context.filesDir, "selected_wallpaper.mp4")
+                        context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                            destFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        destFile.exists() && destFile.length() > 0
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        false
+                    }
+                }
+                
+                if (success) {
+                    val destFile = File(context.filesDir, "selected_wallpaper.mp4")
+                    val fileUri = Uri.fromFile(destFile)
+                    prefs.edit().putString("video_uri", fileUri.toString()).apply()
+                    selectedUri = fileUri
+                    localImportStatusText = "Chọn file thành công!"
+                } else {
+                    // Fallback to direct URI usage if file copying fails
+                    try {
+                        context.contentResolver.takePersistableUriPermission(sourceUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        prefs.edit().putString("video_uri", sourceUri.toString()).apply()
+                        selectedUri = sourceUri
+                        localImportStatusText = "Chọn thành công (Sử dụng liên kết trực tiếp)!"
+                    } catch (pe: Exception) {
+                        pe.printStackTrace()
+                        localImportStatusText = "Lỗi: Không thể mở hoặc phân tích tệp video."
+                    }
+                }
+                isImportingLocalVideo = false
             }
         }
     }
@@ -231,13 +264,23 @@ fun MainScreen(modifier: Modifier = Modifier) {
             ) {
                 Button(
                     onClick = { launcher.launch(arrayOf("video/*")) },
+                    enabled = !isImportingLocalVideo,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 ) {
-                    Text(text = if (selectedUri != null) "📁 Chọn File Video" else "📁 Chọn File Video")
+                    if (isImportingLocalVideo) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp).padding(end = 6.dp),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            strokeWidth = 2.dp
+                        )
+                        Text(text = "Đang xử lý...", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text(text = if (selectedUri != null) "📁 Chọn File Video" else "📁 Chọn File Video")
+                    }
                 }
 
                 FilledIconToggleButton(
@@ -257,6 +300,17 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
+            }
+
+            if (localImportStatusText.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = localImportStatusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (localImportStatusText.startsWith("Lỗi")) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

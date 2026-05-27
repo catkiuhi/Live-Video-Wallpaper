@@ -21,6 +21,7 @@ class VideoWallpaperService : WallpaperService() {
         private var eglHelper: EglHelper? = null
         private var renderer: VideoGlRenderer? = null
         private var mediaPlayer: MediaPlayer? = null
+        private var isMediaPlayerPrepared = false
         private var surfaceTexture: SurfaceTexture? = null
         private var renderThread: Thread? = null
         private var isRunning = false
@@ -111,24 +112,28 @@ class VideoWallpaperService : WallpaperService() {
             synchronized(lock) {
                 isWallpaperVisible = visible
                 if (visible) {
-                    try {
-                        if (mediaPlayer?.isPlaying == false) {
-                            mediaPlayer?.start()
+                    if (isMediaPlayerPrepared) {
+                        try {
+                            if (mediaPlayer?.isPlaying == false) {
+                                mediaPlayer?.start()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                     frameAvailable = true
                 } else {
-                    try {
-                        if (mediaPlayer?.isPlaying == true) {
-                            mediaPlayer?.pause()
+                    if (isMediaPlayerPrepared) {
+                        try {
+                            if (mediaPlayer?.isPlaying == true) {
+                                mediaPlayer?.pause()
+                            }
+                            if (resetOnLock) {
+                                mediaPlayer?.seekTo(0)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                        if (resetOnLock) {
-                            mediaPlayer?.seekTo(0)
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }
                 lock.notifyAll()
@@ -236,17 +241,22 @@ class VideoWallpaperService : WallpaperService() {
         }
 
         private fun releaseMediaPlayer() {
-            try {
-                mediaPlayer?.stop()
-            } catch (e: Exception) {
-                // Ignore
+            synchronized(lock) {
+                isMediaPlayerPrepared = false
+                try {
+                    mediaPlayer?.setOnErrorListener(null)
+                    mediaPlayer?.setOnPreparedListener(null)
+                    mediaPlayer?.stop()
+                } catch (e: Exception) {
+                    // Ignore
+                }
+                try {
+                    mediaPlayer?.release()
+                } catch (e: Exception) {
+                    // Ignore
+                }
+                mediaPlayer = null
             }
-            try {
-                mediaPlayer?.release()
-            } catch (e: Exception) {
-                // Ignore
-            }
-            mediaPlayer = null
         }
 
         private fun setupMediaPlayer(surface: android.view.Surface) {
@@ -256,7 +266,8 @@ class VideoWallpaperService : WallpaperService() {
             if (uriString != null) {
                 try {
                     releaseMediaPlayer()
-                    mediaPlayer = MediaPlayer().apply {
+                    
+                    val mp = MediaPlayer().apply {
                         setOnErrorListener { _, what, extra ->
                             android.util.Log.e("VideoWallpaperService", "MediaPlayer error: what=$what, extra=$extra")
                             true // Handle error gracefully, preventing crashes
@@ -267,13 +278,27 @@ class VideoWallpaperService : WallpaperService() {
                         val vol = if (isMuted) 0f else 1f
                         setVolume(vol, vol)
                         setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
-                        prepare()
-                        if (isWallpaperVisible) {
-                            start()
+                        setOnPreparedListener { preparedMp ->
+                            synchronized(lock) {
+                                isMediaPlayerPrepared = true
+                                if (isWallpaperVisible && isRunning) {
+                                    try {
+                                        preparedMp.start()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                            }
                         }
+                        prepareAsync()
+                    }
+                    
+                    synchronized(lock) {
+                        mediaPlayer = mp
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    releaseMediaPlayer()
                 }
             }
         }

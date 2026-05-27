@@ -77,6 +77,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var rotationAngle by remember { mutableStateOf(prefs.getFloat("video_rotation", 0.0f)) }
     var isMuted by remember { mutableStateOf(prefs.getBoolean("video_muted", true)) }
     var resetOnLock by remember { mutableStateOf(prefs.getBoolean("video_reset_on_lock", false)) }
+    var autoStart by remember { mutableStateOf(prefs.getBoolean("video_auto_start", true)) }
 
     var videoUrlInput by remember { mutableStateOf("") }
     var downloadProgress by remember { mutableStateOf<Float?>(null) }
@@ -782,6 +783,35 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             onCheckedChange = {
                                 resetOnLock = it
                                 prefs.edit().putBoolean("video_reset_on_lock", it).apply()
+                            }
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Tự khởi chạy cùng điện thoại 🚀",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Tự động kích hoạt lại ứng dụng khi khởi động hoặc bật lại nguồn điện thoại. (Lưu ý: Một số dòng máy cần được cấp quyền 'Tự khởi chạy / Auto-start' trong cài đặt thông tin ứng dụng của hệ thống).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = autoStart,
+                            onCheckedChange = {
+                                autoStart = it
+                                prefs.edit().putBoolean("video_auto_start", it).apply()
                             }
                         )
                     }

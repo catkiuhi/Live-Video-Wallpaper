@@ -1287,11 +1287,11 @@ suspend fun downloadVideo(
 }
 
 suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatchers.IO) {
+    // Danh sách Endpoint v11 cập nhật mới nhất
     val endpoints = listOf(
-        "https://api.cobalt.tools/api/json",
-        "https://cobalt.api.rybbt.com/api/json",
         "https://api.cobalt.tools",
-        "https://api.smooth.yt/api/json"
+        "https://cobalt.api.rybbt.com",
+        "https://api.smooth.yt"
     )
     
     for (endpoint in endpoints) {
@@ -1303,12 +1303,16 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
             connection.connectTimeout = 15000
             connection.readTimeout = 15000
             connection.doOutput = true
+            
+            // QUAN TRỌNG: Thêm User-Agent xịn để né Cloudflare chặn
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Content-Type", "application/json")
             
+            // Cấu trúc Payload chuẩn của Cobalt API v11
             val jsonBody = org.json.JSONObject().apply {
                 put("url", urlStr)
-                put("videoQuality", "720")
+                put("vQuality", "720") // Cobalt v11 dùng vQuality thay vì videoQuality
             }
             
             connection.outputStream.use { os ->
@@ -1319,17 +1323,21 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 val responseText = connection.inputStream.bufferedReader().use { it.readText() }
                 val jsonResponse = org.json.JSONObject(responseText)
+                
+                // Cobalt v11 trả về trực tiếp kiểu trạng thái: "stream", "redirect", "picker", "error"
                 val status = jsonResponse.optString("status", "")
                 
                 if (status == "error") {
-                    val errorText = jsonResponse.optString("text", "Lỗi dịch vụ giải mã.")
+                    val errorText = jsonResponse.optString("text", "Lỗi dịch vụ Cobalt.")
                     android.util.Log.e("CobaltAPI", "Endpoint $endpoint error: $errorText")
                 } else {
+                    // Lấy link trực tiếp (status = stream hoặc redirect)
                     val resolvedUrl = jsonResponse.optString("url", "")
                     if (resolvedUrl.isNotEmpty()) {
                         return@withContext resolvedUrl
                     }
                     
+                    // Xử lý nếu trả về mảng picker (status = picker)
                     val pickerArray = jsonResponse.optJSONArray("picker")
                     if (pickerArray != null && pickerArray.length() > 0) {
                         for (i in 0 until pickerArray.length()) {
@@ -1343,6 +1351,8 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
                         }
                     }
                 }
+            } else {
+                android.util.Log.e("CobaltAPI", "Endpoint $endpoint returned HTTP $responseCode")
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -1353,7 +1363,6 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
     }
     null
 }
-
 fun isSocialShareLink(url: String): Boolean {
     val lower = url.lowercase()
     return lower.contains("youtube.com") || 

@@ -14,8 +14,10 @@ android {
     applicationId = "com.aistudio.livevideowallpaper.wpxnrt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    
+    // ĐÃ SỬA: Tăng số định danh để Android trên điện thoại chịu nhận diện đây là bản cập nhật mới
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -45,7 +47,9 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      signingConfig = signingConfigs.getByName("debugConfig")
+      // ĐÃ SỬA: Ép bản build debug tự động sinh ra cũng phải ăn theo chữ ký "release" xịn
+      // Giúp điện thoại không bị lỗi lệch chữ ký (Signature Conflict) khi cập nhật tự động
+      signingConfig = signingConfigs.getByName("release")
     }
   }
   compileOptions {

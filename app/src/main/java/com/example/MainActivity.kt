@@ -1287,11 +1287,11 @@ suspend fun downloadVideo(
 }
 
 suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatchers.IO) {
-    // Danh sách Endpoint v11 cập nhật mới nhất
+    // Danh sách Endpoint v11 cập nhật mới nhất (đã sửa đường dẫn chuẩn)
     val endpoints = listOf(
-        "https://api.cobalt.tools",
-        "https://cobalt.api.rybbt.com",
-        "https://api.smooth.yt"
+        "https://api.cobalt.tools/api/json",
+        "https://cobalt.api.rybbt.com/api/json",
+        "https://api.smooth.yt/api/json"
     )
     
     for (endpoint in endpoints) {
@@ -1309,10 +1309,10 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Content-Type", "application/json")
             
-            // Cấu trúc Payload chuẩn của Cobalt API v11
+            // Cấu trúc Payload chuẩn của Cobalt API v11 (Ép max chất lượng hình nền)
             val jsonBody = org.json.JSONObject().apply {
                 put("url", urlStr)
-                put("vQuality", "720") // Cobalt v11 dùng vQuality thay vì videoQuality
+                put("vQuality", "max") 
             }
             
             connection.outputStream.use { os ->
@@ -1334,10 +1334,12 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
                     // Lấy link trực tiếp (status = stream hoặc redirect)
                     val resolvedUrl = jsonResponse.optString("url", "")
                     if (resolvedUrl.isNotEmpty()) {
-                        return@withContext resolvedUrl
+                        // FIX LỖI GIẢI MÃ: Xóa sạch các ký tự gạch chéo ngược \ bị thừa trong chuỗi JSON
+                        val cleanUrl = resolvedUrl.replace("\\", "")
+                        return@withContext cleanUrl
                     }
                     
-                    // Xử lý nếu trả về mảng picker (status = picker)
+                    // Xử lý nếu trả về mảng picker (status = picker) cho các bài đăng nhiều ảnh/video
                     val pickerArray = jsonResponse.optJSONArray("picker")
                     if (pickerArray != null && pickerArray.length() > 0) {
                         for (i in 0 until pickerArray.length()) {
@@ -1345,7 +1347,9 @@ suspend fun resolveVideoShareLink(urlStr: String): String? = withContext(Dispatc
                             if (item != null) {
                                 val itemUrl = item.optString("url", "")
                                 if (itemUrl.isNotEmpty()) {
-                                    return@withContext itemUrl
+                                    // FIX LỖI GIẢI MÃ: Xóa sạch dấu \ ở phần tử trong mảng luôn
+                                    val cleanItemUrl = itemUrl.replace("\\", "")
+                                    return@withContext cleanItemUrl
                                 }
                             }
                         }
